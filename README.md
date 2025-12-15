@@ -1,2 +1,0 @@
-# normal-KNN-alogritm
-ezzzzzzz
