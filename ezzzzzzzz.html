@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KNN 距離演算法演示</title>
+    <style>
+        /* 1. 網頁背景設為淺黃色 */
+        body {
+            background-color: lightyellow;
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* 防止捲軸出現 */
+            font-family: "Microsoft JhengHei", Arial, sans-serif;
+            height: 100vh;
+            width: 100vw;
+            position: relative;
+            user-select: none; /* 防止選取文字 */
+        }
+
+        /* UI 面板樣式 */
+        #ui-panel {
+            position: fixed;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: white;
+            padding: 15px 25px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            z-index: 1000;
+            text-align: center;
+            border: 2px solid #333;
+            min-width: 300px;
+        }
+
+        #ui-panel h2 {
+            margin: 0 0 10px 0;
+            font-size: 18px;
+            color: #333;
+        }
+
+        .stat-item {
+            font-size: 16px;
+            margin: 5px 0;
+            font-weight: bold;
+            color: #0056b3;
+        }
+
+        /* 按鈕群組 */
+        .btn-group {
+            margin-top: 10px;
+        }
+
+        button {
+            padding: 8px 15px;
+            margin: 0 5px;
+            cursor: pointer;
+            font-size: 14px;
+            border: none;
+            border-radius: 5px;
+            transition: background 0.2s;
+        }
+
+        #btn-start {
+            background-color: #28a745;
+            color: white;
+        }
+        #btn-start:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        #btn-clear {
+            background-color: #dc3545;
+            color: white;
+        }
+
+        /* EZZ 中央目標樣式 */
+        #ezz-target {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100px;
+            height: 100px;
+            background-color: #ff9800;
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 24px;
+            font-weight: bold;
+            border-radius: 50%; /* 圓形以示區別 */
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            z-index: 10;
+        }
+
+        /* 數據點樣式 (100px x 100px) */
+        .data-point {
+            position: absolute;
+            width: 100px;
+            height: 100px;
+            background-color: #87CEEB;
+            border: 2px solid #4682B4;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 20px;
+            font-weight: bold;
+            color: #333;
+            box-sizing: border-box;
+            /* 讓點擊中心為生成點，需偏移 -50px */
+            transform: translate(-50%, -50%);
+            border-radius: 8px;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+            transition: border-color 0.2s, background-color 0.2s;
+        }
+
+        /* 被選中的樣式 */
+        .nearest {
+            background-color: #ff6b6b !important; /* 紅色 */
+            color: white;
+            z-index: 20;
+            border: 3px solid red;
+        }
+        .second-nearest {
+            background-color: #feca57 !important; /* 橘黃色 */
+            color: #333;
+            z-index: 19;
+            border: 3px solid orange;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="ui-panel" class="no-click">
+        <h2>KNN 數據監控面板</h2>
+        <div class="stat-item">最靠近數據 (Top 1): <span id="val-nearest">-</span></div>
+        <div class="stat-item">Top 1 & 2 平均值: <span id="val-average">-</span></div>
+        
+        <div class="btn-group">
+            <button id="btn-start">開始偵測</button>
+            <button id="btn-clear">清除重置</button>
+        </div>
+        <div style="font-size: 12px; color: #666; margin-top:5px;">狀態: <span id="status-text">等待開始...</span></div>
+    </div>
+
+    <div id="ezz-target">EZZ</div>
+
+    <div id="data-container"></div>
+
+    <script>
+        // 變數初始化
+        let counter = 1;
+        let dataPoints = []; // 儲存 {id, value, x, y, element}
+        let timer = null;
+        let isRunning = false;
+        
+        // DOM 元素
+        const uiNearest = document.getElementById('val-nearest');
+        const uiAverage = document.getElementById('val-average');
+        const btnStart = document.getElementById('btn-start');
+        const btnClear = document.getElementById('btn-clear');
+        const statusText = document.getElementById('status-text');
+        const ezzTarget = document.getElementById('ezz-target');
+        const dataContainer = document.getElementById('data-container');
+        const body = document.body;
+
+        // 取得 EZZ 的中心座標
+        function getEzzCenter() {
+            const rect = ezzTarget.getBoundingClientRect();
+            return {
+                x: rect.left + rect.width / 2,
+                y: rect.top + rect.height / 2
+            };
+        }
+
+        // 點擊生成數據 (事件委派)
+        document.addEventListener('click', (e) => {
+            // 如果點擊的是 UI 面板或按鈕，則忽略
+            if (e.target.closest('#ui-panel') || e.target.closest('#ezz-target')) {
+                return;
+            }
+
+            if (counter > 1000) {
+                alert("數據已達上限 1000");
+                return;
+            }
+
+            createDataPoint(e.clientX, e.clientY);
+        });
+
+        // 創建數據點函數
+        function createDataPoint(x, y) {
+            const div = document.createElement('div');
+            div.className = 'data-point';
+            div.textContent = counter;
+            
+            // 設定位置 (CSS 已設定 translate(-50%, -50%) 來置中)
+            div.style.left = x + 'px';
+            div.style.top = y + 'px';
+
+            dataContainer.appendChild(div);
+
+            // 存入陣列
+            dataPoints.push({
+                value: counter,
+                x: x,
+                y: y,
+                element: div
+            });
+
+            counter++;
+        }
+
+        // 開始按鈕邏輯
+        btnStart.addEventListener('click', () => {
+            if (isRunning) return;
+            
+            isRunning = true;
+            btnStart.disabled = true;
+            statusText.textContent = "偵測中 (每1秒更新)...";
+            statusText.style.color = "green";
+
+            // 立即執行一次，然後設定 Interval
+            calculateKNN();
+            
+            // 每 1 秒偵測一次
+            timer = setInterval(calculateKNN, 1000);
+        });
+
+        // 清除按鈕邏輯
+        btnClear.addEventListener('click', () => {
+            // 停止計時
+            clearInterval(timer);
+            isRunning = false;
+            btnStart.disabled = false;
+            statusText.textContent = "已重置，等待開始...";
+            statusText.style.color = "#666";
+
+            // 清空數據
+            dataContainer.innerHTML = '';
+            dataPoints = [];
+            counter = 1;
+
+            // 重置 UI
+            uiNearest.textContent = "-";
+            uiAverage.textContent = "-";
+        });
+
+        // 核心演算法：計算距離並更新 UI
+        function calculateKNN() {
+            if (dataPoints.length === 0) {
+                uiNearest.textContent = "無數據";
+                uiAverage.textContent = "無數據";
+                return;
+            }
+
+            const ezzCenter = getEzzCenter();
+
+            // 1. 計算每個點到 EZZ 的距離
+            dataPoints.forEach(point => {
+                // 歐幾里得距離公式: sqrt((x2-x1)^2 + (y2-y1)^2)
+                const dist = Math.sqrt(
+                    Math.pow(point.x - ezzCenter.x, 2) + 
+                    Math.pow(point.y - ezzCenter.y, 2)
+                );
+                point.distance = dist;
+                
+                // 重置樣式
+                point.element.classList.remove('nearest');
+                point.element.classList.remove('second-nearest');
+            });
+
+            // 2. 根據距離排序 (由小到大)
+            dataPoints.sort((a, b) => a.distance - b.distance);
+
+            // 3. 獲取最近和第二近
+            const nearest = dataPoints[0];
+            const secondNearest = dataPoints.length > 1 ? dataPoints[1] : null;
+
+            // 4. 更新 UI 和 樣式
+            if (nearest) {
+                nearest.element.classList.add('nearest');
+                uiNearest.textContent = nearest.value;
+            }
+
+            if (secondNearest) {
+                secondNearest.element.classList.add('second-nearest');
+                // 計算平均：(最近 + 第二近) / 2
+                const avg = (nearest.value + secondNearest.value) / 2;
+                uiAverage.textContent = avg.toFixed(1); // 顯示到小數點後一位
+            } else {
+                // 只有一個數據的情況
+                uiAverage.textContent = nearest.value + " (數據不足)";
+            }
+        }
+
+        // 視窗改變大小時，可能需要重新計算 EZZ 位置，不過每次 calculateKNN 都會重抓，所以不需額外監聽
+    </script>
+</body>
+</html>
